@@ -1,10 +1,13 @@
 import cv2
+
+#pip install opencv-python
+
 #from PIL import Image
 #from matplotlib import pyplot as plt
 import numpy as np
 import math
 #constants
-DEFAULT_SIZE = (256,256)
+DEFAULT_SIZE = (700,700)
 ORGIN = (DEFAULT_SIZE[0]//2,DEFAULT_SIZE[1]//2) #pixel space location of orgin
 FUNCTION_SCALE = 0.1 #0.1 in fxn scale per pixel
 
@@ -67,62 +70,77 @@ def plot_cartesian(map,f,color = (255,255,255)):
             if (a!=b or a!=c or a!=d):
                 plot_point(map,x,y,color)
 
-def engorge(map,rad = 2):
-    newMap = np.zeros(map.shape,np.uint8)
-    for x in range(DEFAULT_SIZE[0]):
-        for y in range(DEFAULT_SIZE[1]):
-            if map[x,y,0] != 0:
-                newMap[x,y] = (255,255,255)
-            else:
-                cont = True
-                for xoff in range(-rad,rad + 1):
-                    for yoff in range(-rad,rad + 1):
-                        if (x+xoff >= 0 and x+xoff < DEFAULT_SIZE[0] and y+yoff >=0 and y + yoff < DEFAULT_SIZE[1]):
-                            if (map[x+xoff,y+yoff,0] != 0):
-                                newRad = xoff**2 + yoff**2
-                                if newRad < rad**2:
-                                    newMap[x,y] = (255,255,255)
-                                    cont = False
-                        if not cont:
-                            break
-                    if not cont:
-                        break
-    
-    #for exvery pixel, if it has a white pixel within rad ditance, color it white
-    #this engorges the normally very thin graph lines to
-    #thick lines-a track. 
-    return newMap
+def engorge(map,itr = 20): #thickens lines
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3,3))
+    dilate = cv2.dilate(map, kernel, iterations=itr)
+    return dilate
 
 
-def makeImageFromFunc(name,cartFunc,polarFunc,orgin,pixelsToMeters=1,filepath=""):
+
+#orgin is car coords at the beginning, in pixel space
+#you may need to play with orgin values to find one that is actually within the track
+def makeImageFromFunc(name,cartFunc,polarFunc,orgin,pixelsToMeters=0.07712,filepath="",show = True):
     blank = np.zeros((DEFAULT_SIZE[0],DEFAULT_SIZE[1],3), np.uint8)
     #blank.fill(255)
-    plot_cartesian(blank,lambda x,y:y==0)
+    #plot_cartesian(blank,lambda x,y:y==0)
+
+    
+    print("Graphing functions...")
     for c in cartFunc:
         plot_cartesian(blank,c)
     for p in polarFunc:
         plot_polar(blank,p)
+
+
+    print("Thickening lines...")
     blank = engorge(blank)
+    
     #cv2.imshow("Eng",blank)
     #take engorged track image, apply canny edge to get track edges
+    print("Getting edges...")
     edges = cv2.Canny(image=blank, threshold1=100, threshold2=200)
     #cv2.imshow('Canny Edge Detection', edges)
-    edges = 255 - edges
+
+    #add edges to image, to keep car from escaping
+    for row in range(DEFAULT_SIZE[0]):
+        edges[row,0] = 255
+        edges[row,DEFAULT_SIZE[1] - 1] = 255
+    for col in range(DEFAULT_SIZE[1]):
+        edges[DEFAULT_SIZE[0] - 1,col] = 255
+        edges[0,col] = 255
+
+
     #canny returns with thin white lines on black bckgrnd
     #so invert colors to fulfill formatting for f1tenths
-    cv2.imshow('Final map', edges)
+    edges = engorge(edges,1)
+        
+    edges = 255 - edges
+
+    disp = edges.copy()
+    disp[orgin[1],orgin[0]] = 0
+
+    if (show):
+        cv2.imshow('Final map', disp)
     if (filepath != "" and filepath[-1] != "/" and filepath[-1] != "\\"): filepath = filepath + "/"
 
-    cv2.imwrite(filepath + name+".png", blank)
+ #for some reason negative meters moves the car right
+
+    orgin[0] = orgin[0] * -pixelsToMeters
+    orgin[1] = orgin[1] * -pixelsToMeters
+    
+
+    cv2.imwrite(filepath + name+".png", edges)
     fobj = open(filepath + name+".yaml","w+")
     fobj.write("image: "+name+".png\n")
     fobj.write("resolution: "+str(pixelsToMeters)+"\n")
     orgin.append(0.000)
-    fobj.write("orgin: " + str(orgin)+"\n")
+    fobj.write("origin: " + str(orgin))
     fobj.write("""
 negate: 0
 occupied_thresh: 0.45
 free_thresh: 0.196
+starting_angle: 0
+default_resolution: 0.07712
 """)
     fobj.close()
-makeImageFromFunc("LOOP",[],[lambda theta:10],[0,0],1)
+makeImageFromFunc("LOOP",[],[lambda theta:30],[645,350],0.07712,show = True)
