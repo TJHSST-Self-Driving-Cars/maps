@@ -6,6 +6,9 @@ import cv2
 #from matplotlib import pyplot as plt
 import numpy as np
 import math
+import random
+import copy
+
 #constants
 DEFAULT_SIZE = (700,700)
 ORGIN = (DEFAULT_SIZE[0]//2,DEFAULT_SIZE[1]//2) #pixel space location of orgin
@@ -70,6 +73,49 @@ def plot_cartesian(map,f,color = (255,255,255)):
             if (a!=b or a!=c or a!=d):
                 plot_point(map,x,y,color)
 
+def plot_pix_line(map,pt1,pt2):
+    corners = np.zeros((DEFAULT_SIZE[0],DEFAULT_SIZE[1]), np.uint8)
+    m = (pt1[1]-pt2[1])
+    den = pt1[0]-pt2[0]
+    if den == 0:
+        m = 1000000
+    else:
+        m /= den
+    b = pt1[1] - (m * pt1[0])
+    xR = -1 if pt1[0] > pt2[0] else 1
+    yR = -1 if pt1[1] > pt2[1] else 1
+    for x in range(pt1[0]-xR,pt2[0] + xR,xR):
+        for y in range(pt1[1]-yR,pt2[1] + yR,yR):
+            if (m*x+b) - y < 0:
+                corners[x,y] = 1
+    #cv2.imshow("corn", corners)
+    for x in range(pt1[0],pt2[0],xR):
+        for y in range(pt1[1],pt2[1],yR):
+            a = corners[x,y]
+            b = corners[x+1,y]
+            c = corners[x+1,y+1]
+            d = corners[x,y+1]
+            if (a!=b or a!=c or a!=d):
+                plot_point(map,x,y,(255,255,255))
+
+def plot_circle_segment(map,pt1,pt2,ctr):
+    corners = np.zeros((DEFAULT_SIZE[0],DEFAULT_SIZE[1]), np.uint8)
+    radiusSQ = (ctr[0]-pt1[0])**2 + (ctr[1]-pt1[1])**2
+    xR = -1 if pt1[0] > pt2[0] else 1
+    yR = -1 if pt1[1] > pt2[1] else 1
+    for x in range(pt1[0] - xR,pt2[0] + xR,xR):
+        for y in range(pt1[1]-yR,pt2[1] + yR,yR):
+            if (x-ctr[0])**2 + (y-ctr[1])**2 < radiusSQ:
+                corners[x,y] = 1
+    for x in range(pt1[0],pt2[0], xR):
+        for y in range(pt1[1],pt2[1],yR):
+            a = corners[x,y]
+            b = corners[x+1,y]
+            c = corners[x+1,y+1]
+            d = corners[x,y+1]
+            if (a!=b or a!=c or a!=d):
+                plot_point(map,x,y,(255,255,255))
+         
 def engorge(map,itr = 20): #thickens lines
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3,3))
     dilate = cv2.dilate(map, kernel, iterations=itr)
@@ -84,14 +130,14 @@ def makeImageFromFunc(name,cartFunc,polarFunc,orgin,pixelsToMeters=0.07712,filep
     #blank.fill(255)
     #plot_cartesian(blank,lambda x,y:y==0)
 
+    if (filepath != "" and filepath[-1] != "/" and filepath[-1] != "\\"): filepath = filepath + "/"
+
     
     print("Graphing functions...")
     for c in cartFunc:
         plot_cartesian(blank,c)
     for p in polarFunc:
         plot_polar(blank,p)
-
-
     print("Thickening lines...")
     blank = engorge(blank)
     
@@ -121,7 +167,6 @@ def makeImageFromFunc(name,cartFunc,polarFunc,orgin,pixelsToMeters=0.07712,filep
 
     if (show):
         cv2.imshow('Final map', disp)
-    if (filepath != "" and filepath[-1] != "/" and filepath[-1] != "\\"): filepath = filepath + "/"
 
  #for some reason negative meters moves the car right
 
@@ -143,4 +188,196 @@ starting_angle: 0
 default_resolution: 0.07712
 """)
     fobj.close()
-makeImageFromFunc("LOOP",[],[lambda theta:30],[645,350],0.07712,show = True)
+
+def skele(img):
+    
+    # Step 1: Create an empty skeleton
+    size = np.size(img)
+    skel = np.zeros(img.shape, np.uint8)
+
+    # Get a Cross Shaped Kernel
+    element = cv2.getStructuringElement(cv2.MORPH_CROSS, (3,3))
+    # Repeat steps 2-4
+    while True:
+        #Step 2: Open the image
+        open = cv2.morphologyEx(img, cv2.MORPH_OPEN, element)
+        #Step 3: Substract open from the original image
+        temp = cv2.subtract(img, open)
+        #Step 4: Erode the original image and refine the skeleton
+        eroded = cv2.erode(img, element)
+        skel = cv2.bitwise_or(skel,temp)
+        img = eroded.copy()
+        # Step 5: If there are no white pixels left ie.. the image has been completely eroded, quit the loop
+        if cv2.countNonZero(img)==0:
+            break
+    return skel
+
+def flood(map,pt):
+    h, w = map.shape[:2]
+
+    mask = np.zeros((h+2, w+2), np.uint8)
+    #Floodfill from point (0, 0)
+    cv2.floodFill(map, mask, pt, 0); #fill image
+    cv2.floodFill(map, mask, (0,0), 255); #remove border
+    
+#saves image to be cleaned
+def make_graph(filename):
+    map = cv2.cvtColor(cv2.imread(filename),cv2.COLOR_BGR2GRAY)
+    map = cv2.addWeighted( map, 100, map, 0, -500)
+    #cv2.imshow("m",map)
+    #cv2.waitKey(0)
+    flood(map,(650,500))
+    img = skele(255 - map)
+    #img = # call addWeighted function. use beta = 0 to effectively only operate one one image
+    img = cv2.addWeighted( img, 100, img, 0, -500)
+    img = skele(img)
+    cv2.imshow("skel", img)
+    print("please clean up "+filename + " and remove and small deviations from the idea path.")
+    cv2.imwrite("GRAPH_"+filename,img)
+
+def get_point(points,t):
+    p0, p1, p2, p3 = (0,0,0,0);
+
+   
+    p1 = int(t);
+    p2 = (p1 + 1) % len(points);
+    p3 = (p2 + 1) % len(points);
+    p0 = (p1 - 1) % len(points);
+    
+    t = t - int(t)
+
+    tt = t * t;
+    ttt = tt * t;
+
+    q1 = (-ttt) + (2.0*tt) - t;
+    q2 = (3.0*ttt) - (5.0*tt) + 2.0;
+    q3 = (-3.0*ttt) + (4.0*tt) + t;
+    q4 = ttt - tt  
+
+    tx = 0.5 * (points[p0][0] * q1 + points[p1][0] * q2 + points[p2][0] * q3 + points[p3][0] * q4);
+    ty = 0.5 * (points[p0][1] * q1 + points[p1][1] * q2 + points[p2][1] * q3 + points[p3][1] * q4);
+
+    return ( int(tx), int(ty) );
+
+def draw_splines(map,points):
+    #points = [(650,150), (550,250), (550, 500), (650,650),(680,600)]
+    col = (255)
+    if (len(map.shape) == 3):
+        col = (0,0,255)
+
+    #disp points
+    for i in points:
+        cv2.circle(map,(int(i[0]),int(i[1])),2,col,3)
+    coords = get_point(points,0)
+    t = 0.001   
+    while (t < len(points)):
+        last = coords
+        coords = get_point(points,t)
+        cv2.line(map,last,coords,col,1)
+        t += 0.001
+    #cv2.imshow('spline', map)
+
+def place_between(lis, index,dx = 0,dy = 0):
+    return lis[:index + 1]+[(dx + (lis[index][0] + lis[index+1][0])//2 , dy + (lis[index][1] + lis[index+1][1])//2)] + lis[index + 1:]
+
+def translate(newL,index,dx=0,dy =0):
+    newL[index] = (newL[index][0] + dx, newL[index][1] +dy)
+    
+
+def extract_line(filename):
+    map = cv2.cvtColor(cv2.imread(filename),cv2.COLOR_BGR2GRAY)
+    map = cv2.addWeighted( map, 100, map, 0, -500)
+    colMap = cv2.imread(filename[len("GRAPH_"):])
+    
+    #cv2.imshow("map", map)
+
+    
+    #place red pixels at initial splice points    
+    spline_pts = np.argwhere(  (colMap == (0,0,255)).all(axis = 2))
+    nl = []
+    for i in spline_pts:
+        nl.append((i[1],i[0]))
+    #draw_splines(colMap,nl)
+    #cv2.imwrite("ordering.png",colMap)
+    # for SILVERSTONE_OBS ONLY
+    reOrd = [0,2,8,9,12,14,17,18,23,22,20,21,19,16,15,11,13,10,4,3,7,6,5,1]
+    newL = [nl[i] for i in reOrd]
+    newL[8] = (newL[8][0]+30, newL[8][1] - 50)
+    #newL = place_between(newL,8,dy = 25)
+    #newL = place_between(newL,8,dy = 25)
+    translate(newL,0,-25,-10)
+    translate(newL,-7,-30,-40)
+    translate(newL,-12,20)
+    translate(newL,-14,20,30)
+    #draw_splines(colMap,newL)
+    #print(nl)
+    return newL
+    #cv2.imshow("main",colMap)
+    #cv2.imwrite("output.png",colMap)
+    
+def spline_length(points):
+    coords = get_point(points,0)
+    t = 0.01
+    dist = 0
+    while (t < len(points)):
+        last = coords
+        coords = get_point(points,t)
+        dist += np.sqrt( (coords[0] - last[0])**2 + (coords[1] - last[1])**2)
+        t += 0.01
+    return dist
+
+def genetic(track,points,f,alpha):
+    newL = np.copy(points)
+    for x in range(track.shape[0]):
+        for y in range(track.shape[1]):
+            if track[y,x][2] != track[y,x][1]:
+                track[y,x] = (255,255,255)
+    # remove red waypoints
+    
+    cv2.imshow("main",track)
+    #cv2.waitKey(0)
+    track = cv2.cvtColor(track,cv2.COLOR_BGR2GRAY)
+    track = 255 - track
+    map = track.copy()
+    cv2.imshow("main",map)
+    smallest = 1028289
+    for _ in range(100):
+        while (cv2.countNonZero(map & track) != 0):
+            map *= 0
+            newL = copy.deepcopy(points)
+            translate(newL,random.randint(0,len(newL)-1),alpha * (random.randint(-100,100))/100,alpha * (random.randint(-100,100))/100)
+            draw_splines(map,newL)
+            map = engorge(map,1)
+        if spline_length(newL) < smallest:
+            points = np.copy(newL)
+    draw_splines(map,points)
+    cv2.imshow("main",map | track)
+    return points,(map | track)
+    #cv2.imshow('map', map)
+    #cv2.imwrite("mappp.png",map)
+    #cv2.imshow("main",map & track)
+    #cv2.imwrite("save.png",map&track)
+    #
+    
+lClick = False
+def click(event, x, y, flags, param):
+    global lClick
+    if event == cv2.EVENT_LBUTTONDOWN and not lClick:
+        lClick = True
+    elif event == cv2.EVENT_LBUTTONUP and lClick:
+        lClick = False
+	# record the ending (x, y) coord
+
+cv2.namedWindow("main")
+cv2.setMouseCallback("main", click)
+
+spline_pts = extract_line("GRAPH_SILVERSTONE_OBS.png")
+genetic(cv2.imread("SILVERSTONE_OBS.png"),spline_pts,1,0.2)
+#[(1295, 105), (807, 167), (1414, 190), (803, 353), (904, 370), (672, 383), (664, 480), (725, 511), (1475, 563), (1516, 722), (1374, 798), (1262, 830), (1484, 868), (1332, 946), (1529, 946), (1022, 971), (790, 981), (1545, 1045), (1430, 1156), (475, 1411), (657, 1529), (576, 1579), (890, 1839), (1049, 1852)]
+
+
+#makeImageFromFunc("STD",[],[],[645,350],0.07712,show = True)
+
+#blank = np.zeros((DEFAULT_SIZE[0],DEFAULT_SIZE[1],3), np.uint8)
+#plot_circle_segment(blank,(0,255),(255,0),(255,255))
+#cv2.imshow("blank",blank)
